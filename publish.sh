@@ -26,7 +26,7 @@ if [ ! -f "package.json" ]; then
 fi
 
 # 2. Ensure npm is logged in
-echo "[1/7] Checking npm authentication..."
+echo "[1/8] Checking npm authentication..."
 if ! npm whoami &>/dev/null; then
     echo "ERROR: Not logged in to npm. Run 'npm login' first."
     exit 1
@@ -35,32 +35,43 @@ echo "       Logged in as: $(npm whoami)"
 echo ""
 
 # 3. Sync @romatech/orm dependency to latest published version
-echo "[2/7] Syncing @romatech/orm to latest version..."
+echo "[2/8] Syncing @romatech/orm to latest version..."
 ORM_VERSION=$(npm view @romatech/orm version 2>/dev/null || echo "1.0.0")
 echo "       Latest @romatech/orm: $ORM_VERSION"
 sed -i "s|\"@romatech/orm\": \".*\"|\"@romatech/orm\": \"^$ORM_VERSION\"|g" package.json
 echo ""
 
 # 4. Install dependencies
-echo "[3/7] Installing dependencies..."
+echo "[3/8] Installing dependencies..."
 npm ci --silent
 echo "       Done."
 echo ""
 
 # 5. Build
-echo "[4/7] Building..."
+echo "[4/8] Building..."
 npm run build
 echo ""
 
 # 6. Version bump
-echo "[5/7] Bumping version ($BUMP)..."
+echo "[5/8] Bumping version ($BUMP)..."
 npm version "$BUMP" --no-git-tag-version
 NEW_VERSION=$(node -p "require('./package.json').version")
 echo "       New version: $NEW_VERSION"
 echo ""
 
-# 7. Publish
-echo "[6/7] Publishing $PKG_NAME@$NEW_VERSION to npm..."
+# 7. Update CHANGELOG
+echo "[6/8] Updating CHANGELOG.md..."
+if [ -f "CHANGELOG.md" ]; then
+    DATE=$(date +%Y-%m-%d)
+    sed -i "s/## \[Unreleased\]/## [Unreleased]\n\n## [$NEW_VERSION] - $DATE/" CHANGELOG.md
+    echo "       Done."
+else
+    echo "       (no CHANGELOG.md found, skipping)"
+fi
+echo ""
+
+# 8. Publish
+echo "[7/8] Publishing $PKG_NAME@$NEW_VERSION to npm..."
 npm publish --access public
 echo ""
 
@@ -68,10 +79,10 @@ echo "============================================"
 echo " Published $PKG_NAME@$NEW_VERSION"
 echo "============================================"
 
-# 8. Commit and tag
+# 9. Commit and tag
 echo ""
-echo "[7/7] Committing version bump and creating git tag..."
-git add package.json package-lock.json 2>/dev/null || true
+echo "[8/8] Committing version bump and creating git tag..."
+git add package.json package-lock.json CHANGELOG.md 2>/dev/null || true
 git commit -m "chore: release v$NEW_VERSION"
 git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
 echo ""

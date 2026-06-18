@@ -1,5 +1,8 @@
 # @romatech/orm-providers-pgsql
 
+[![npm](https://img.shields.io/npm/v/@romatech%2Form-providers-pgsql)](https://www.npmjs.com/package/@romatech/orm-providers-pgsql)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/RomaTech-LTDA/orm-providers-pgsql/blob/main/LICENSE)
+
 <p align="center">
   <img src="logo.png" width="120" alt="RomaTech ORM – PostgreSQL Provider" />
 </p>

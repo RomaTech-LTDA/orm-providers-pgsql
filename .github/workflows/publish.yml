@@ -34,14 +34,14 @@ jobs:
           echo "Syncing to @romatech/orm@$ORM_VERSION"
           sed -i "s|\"@romatech/orm\": \".*\"|\"@romatech/orm\": \"^$ORM_VERSION\"|g" package.json
 
-      - name: Bump minor version
-        run: npm version minor --no-git-tag-version
-
       - name: Install dependencies
-        run: npm ci
+        run: npm install --legacy-peer-deps
 
       - name: Build
-        run: npm run build
+        run: npm run build --if-present
+
+      - name: Bump minor version
+        run: npm version minor --no-git-tag-version
 
       - name: Publish to npm
         run: npm publish --provenance --access public
@@ -50,6 +50,6 @@ jobs:
 
       - name: Commit and push version bump
         run: |
-          git add package.json package-lock.json
-          git commit -m "chore: bump version to $(node -p 'require(\"./package.json\").version')"
-          git push
+          git add package.json package-lock.json 2>/dev/null || true
+          git commit -m "chore: bump version to $(node -p 'require(\"./package.json\").version')" || true
+          git pull --rebase origin main || true && git push || true
