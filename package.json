@@ -1,61 +1,61 @@
 {
-    "name":  "@romatech/orm-providers-pgsql",
-    "version": "1.1.0",
-    "description":  "PostgreSQL provider for RomaTech ORM",
-    "author":  "RomaTech/Leandro Romanelli",
-    "license":  "MIT",
-    "repository":  {
-                       "type":  "git",
-                       "url":  "https://github.com/RomaTech-LTDA/orm-providers-pgsql"
-                   },
-    "homepage":  "https://github.com/RomaTech-LTDA/orm-providers-pgsql#readme",
-    "bugs":  {
-                 "url":  "https://github.com/RomaTech-LTDA/orm-providers-pgsql/issues"
-             },
-    "keywords":  [
-                     "orm",
-                     "postgresql",
-                     "postgres",
-                     "pg",
-                     "romatech",
-                     "database",
-                     "typescript"
-                 ],
-    "main":  "dist/index.js",
-    "types":  "dist/index.d.ts",
-    "exports":  {
-                    ".":  {
-                              "types":  "./dist/index.d.ts",
-                              "default":  "./dist/index.js"
-                          }
-                },
-    "files":  [
-                  "dist",
-                  "README.md",
-                  "LICENSE"
-              ],
-    "scripts":  {
-                    "clean":  "rimraf dist",
-                    "build":  "npm run clean \u0026\u0026 tsc",
-                    "watch":  "tsc --watch"
-                },
-    "dependencies":  {
-                         "pg":  "^8.11.0"
-                     },
-    "peerDependencies":  {
-                             "@romatech/orm": "^1.0.0"
-                         },
-    "devDependencies":  {
-                            "@romatech/orm": "^1.0.0",
-                            "@types/node":  "^24.1.0",
-                            "@types/pg":  "^8.11.0",
-                            "rimraf":  "^6.0.1",
-                            "typescript":  "^5.9.3"
-                        },
-    "engines":  {
-                    "node":  "\u003e=18"
-                },
-    "publishConfig":  {
-                          "access":  "public"
-                      }
+    "name": "@romatech/orm-providers-pgsql",
+    "version": "1.2.0",
+    "description": "PostgreSQL provider for RomaTech ORM",
+    "author": "RomaTech/Leandro Romanelli",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/RomaTech-LTDA/orm-providers-pgsql"
+    },
+    "homepage": "https://github.com/RomaTech-LTDA/orm-providers-pgsql#readme",
+    "bugs": {
+        "url": "https://github.com/RomaTech-LTDA/orm-providers-pgsql/issues"
+    },
+    "keywords": [
+        "orm",
+        "postgresql",
+        "postgres",
+        "pg",
+        "romatech",
+        "database",
+        "typescript"
+    ],
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        }
+    },
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE"
+    ],
+    "scripts": {
+        "clean": "rimraf dist",
+        "build": "npm run clean && tsc",
+        "watch": "tsc --watch"
+    },
+    "dependencies": {
+        "pg": "^8.11.0"
+    },
+    "peerDependencies": {
+        "@romatech/orm": "^1.2.0"
+    },
+    "devDependencies": {
+        "@romatech/orm": "^1.2.0",
+        "@types/node": "^24.1.0",
+        "@types/pg": "^8.11.0",
+        "rimraf": "^6.0.1",
+        "typescript": "^5.9.3"
+    },
+    "engines": {
+        "node": ">=18"
+    },
+    "publishConfig": {
+        "access": "public"
+    }
 }
