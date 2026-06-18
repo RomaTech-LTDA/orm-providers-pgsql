@@ -6,11 +6,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/romatech-ltda/orm-providers-pgsql"
+    "url": "https://github.com/RomaTech-LTDA/orm-providers-pgsql"
   },
-  "homepage": "https://github.com/romatech-ltda/orm-providers-pgsql#readme",
+  "homepage": "https://github.com/RomaTech-LTDA/orm-providers-pgsql#readme",
   "bugs": {
-    "url": "https://github.com/romatech-ltda/orm-providers-pgsql/issues"
+    "url": "https://github.com/RomaTech-LTDA/orm-providers-pgsql/issues"
   },
   "keywords": [
     "orm",
