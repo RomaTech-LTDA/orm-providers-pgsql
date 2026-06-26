@@ -3,12 +3,10 @@ name: Publish to npm
 on:
   push:
     branches: ["main"]
-    paths-ignore:
-      - '*.md'
-      - 'index.html'
-      - 'logo.png'
-      - '.github/ISSUE_TEMPLATE/**'
-      - '.github/PULL_REQUEST_TEMPLATE.md'
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'tsconfig.json'
   workflow_dispatch:
 
 concurrency:
@@ -16,110 +14,66 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  wait-for-orm:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Wait for @romatech/orm to be available
-        run: |
-          echo "Checking @romatech/orm availability..."
-          for i in $(seq 1 10); do
-            VERSION=$(npm view @romatech/orm version 2>/dev/null || echo "")
-            if [ -n "$VERSION" ]; then
-              echo "Found @romatech/orm@$VERSION"
-              break
-            fi
-            echo "Attempt $i/10 - waiting 15s..."
-            sleep 15
-          done
-
   publish:
-    needs: wait-for-orm
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - name: Check if publishable changes
+      - name: Check if version already published
         id: check
         run: |
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          if [ -z "$LAST_TAG" ]; then
-            echo "publish=true" >> $GITHUB_OUTPUT
+          VERSION=$(node -p "require('./package.json').version")
+          NAME=$(node -p "require('./package.json').name")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          PUBLISHED=$(npm view "$NAME@$VERSION" version 2>/dev/null || echo "")
+          if [ "$PUBLISHED" = "$VERSION" ]; then
+            echo "publish=false" >> $GITHUB_OUTPUT
           else
-            CHANGES=$(git diff --name-only "$LAST_TAG"..HEAD -- src/ package.json tsconfig.json 2>/dev/null | wc -l)
-            if [ "$CHANGES" -gt 0 ]; then
-              echo "publish=true" >> $GITHUB_OUTPUT
-            else
-              echo "publish=false" >> $GITHUB_OUTPUT
-              echo "No publishable changes since $LAST_TAG"
-            fi
+            echo "publish=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Setup Node.js
+      - uses: actions/setup-node@v4
         if: steps.check.outputs.publish == 'true'
-        uses: actions/setup-node@v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Configure git
+      - name: Sync @romatech/orm version
         if: steps.check.outputs.publish == 'true'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Sync @romatech/orm to latest
-        if: steps.check.outputs.publish == 'true'
-        run: |
-          ORM_VERSION=$(npm view @romatech/orm version 2>/dev/null || echo "1.0.0")
-          echo "Syncing to @romatech/orm@$ORM_VERSION"
+          ORM_VERSION=$(npm view @romatech/orm version 2>/dev/null || echo "2.0.0")
           sed -i "s|\"@romatech/orm\": \".*\"|\"@romatech/orm\": \"^$ORM_VERSION\"|g" package.json
 
-      - name: Install dependencies
+      - run: npm install --legacy-peer-deps
         if: steps.check.outputs.publish == 'true'
-        run: npm install --legacy-peer-deps
 
-      - name: Build
+      - run: npm run build --if-present
         if: steps.check.outputs.publish == 'true'
-        run: npm run build --if-present
 
-      - name: Test
+      - run: npm test --if-present
         if: steps.check.outputs.publish == 'true'
-        run: npm test --if-present
 
-      - name: Bump version
-        if: steps.check.outputs.publish == 'true'
-        id: version
-        run: |
-          npm version patch --no-git-tag-version
-          VERSION=$(node -p "require('./package.json').version")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Publish to npm
+      - name: Publish
         if: steps.check.outputs.publish == 'true'
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Commit, tag, and push
+      - name: Tag + Release
         if: steps.check.outputs.publish == 'true'
         run: |
-          git add -A
-          git commit -m "chore: release v${{ steps.version.outputs.version }} [skip ci]"
-          git tag "v${{ steps.version.outputs.version }}"
-          git push
-          git push --tags
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "v${{ steps.check.outputs.version }}" || true
+          git push --tags || true
 
-      - name: Create GitHub Release
+      - name: GitHub Release
         if: steps.check.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
+          tag_name: v${{ steps.check.outputs.version }}
+          name: v${{ steps.check.outputs.version }}
           generate_release_notes: true

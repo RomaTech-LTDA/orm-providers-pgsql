@@ -1,6 +1,6 @@
 {
     "name":  "@romatech/orm-providers-pgsql",
-    "version": "1.1.0",
+    "version": "2.0.0",
     "description":  "PostgreSQL provider for RomaTech ORM",
     "author":  "RomaTech/Leandro Romanelli",
     "license":  "MIT",
@@ -43,10 +43,10 @@
                          "pg":  "^8.11.0"
                      },
     "peerDependencies":  {
-                             "@romatech/orm": "^1.2.0"
+                             "@romatech/orm": "^2.0.0"
                          },
     "devDependencies":  {
-                            "@romatech/orm": "^1.2.0",
+                            "@romatech/orm": "^2.0.0",
                             "@types/node":  "^24.1.0",
                             "@types/pg":  "^8.11.0",
                             "rimraf":  "^6.0.1",
