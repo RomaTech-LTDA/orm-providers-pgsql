@@ -50,7 +50,7 @@
                             "@types/node":  "^24.1.0",
                             "@types/pg":  "^8.11.0",
                             "rimraf":  "^6.0.1",
-                            "typescript":  "^5.9.3"
+                            "typescript":  "^7.0.2"
                         },
     "engines":  {
                     "node":  "\u003e=18"
