@@ -86,8 +86,33 @@ new PgSqlProvider('postgresql://postgres:password@localhost:5432/mydb')
 - Server-side ORDER BY generation
 - Migration history table (`"__roma_migrations"`)
 - Schema management (createTable, dropTable, addColumn, removeColumn)
-- Scaffold (introspect via `pg_tables` and `information_schema.columns`)
+- Scaffold (introspect via `pg_class`/`current_schemas` and `information_schema.columns`)
 - Parameterised queries (SQL injection safe)
+- Transactions through `DbContext.beginTransaction()`
+
+### Notes
+
+- The provider uses **one connection** (`pg.Client`): a transaction covers
+  every statement sent through the provider meanwhile, so use one `DbContext`
+  per unit of work when requests run concurrently.
+- Unqualified table names resolve through the `search_path`, like the
+  provider's DML: introspection only reads the schema the name resolves to.
+- `update`, `remove` and `find` locate the row by the table's single-column
+  primary key (or `id` when the table has none). Tables with a **composite**
+  primary key are rejected with an error, instead of matching every row that
+  shares the first key column.
+- The primary key of each table is introspected once and cached. The cache is
+  cleared after the provider's own DDL and after raw statements that are not
+  `SELECT`/`WITH`/`SHOW`/`EXPLAIN` (a `ROLLBACK` can undo DDL); call
+  `provider.clearMetadataCache()` if another process changes the schema while
+  the provider is connected.
+- Query predicates are evaluated by PostgreSQL and then re-checked in
+  JavaScript on converted copies of the rows: `bigint` and `numeric` (strings
+  in `pg`) are compared as numbers, so `x => x.id === 5` works on a `bigserial`
+  key. The rows you get back are the driver's rows, unchanged (`bigint` stays
+  a string; values beyond `Number.MAX_SAFE_INTEGER` are compared as strings).
+  A comparison of a date column with a string literal
+  (`x => x.createdAt >= '2024-01-01'`) is left to PostgreSQL.
 
 ---
 

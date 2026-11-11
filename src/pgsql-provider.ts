@@ -12,9 +12,8 @@
  * - `CREATE TABLE IF NOT EXISTS` for idempotent DDL
  */
 
-import { Client } from 'pg';
+import { Client, QueryResult } from 'pg';
 import {
-  applyClientSideQuery,
   buildDeleteSql,
   buildFindSql,
   buildInsertSql,
@@ -26,6 +25,10 @@ import {
   SqlDialect,
   TableColumnInfo
 } from '@romatech/orm';
+import { applyQueryToDriverRows, DriverColumns, toDate, toNumber, ValueConverter } from './driver-rows';
+
+/** Raw statements that cannot change the schema (they keep the key cache). */
+const READ_ONLY_STATEMENT = /^\s*(SELECT|WITH|SHOW|EXPLAIN|VALUES|TABLE)\b/i;
 
 /**
  * Configuration object for a PostgreSQL connection.
@@ -115,6 +118,9 @@ export class PgSqlProvider implements IDbProvider {
   /** The `pg` Client used for all database operations. */
   private client!: Client;
 
+  /** Primary-key columns per table, so DML does not introspect on every call. */
+  private readonly primaryKeyCache = new Map<string, Promise<string[]>>();
+
   /**
    * Creates a new `PgSqlProvider` instance.
    *
@@ -181,7 +187,7 @@ export class PgSqlProvider implements IDbProvider {
    */
   async add<T extends object>(entity: T, tableName: string): Promise<void> {
     const command = buildInsertSql(tableName, entity, dialect);
-    await this.executeNonQuery(command.sql, command.params);
+    await this.send(command.sql, command.params);
   }
 
   /**
@@ -224,12 +230,13 @@ export class PgSqlProvider implements IDbProvider {
    */
   async update<T extends object>(entity: T, tableName: string): Promise<void> {
     const primaryKey = await this.getPrimaryKeyColumn(tableName);
-    // Guard: skip round-trip if there are no columns to update besides the PK.
-    if (!Object.keys(entity).some(key => key !== primaryKey)) {
+    // Guard: skip round-trip if there are no columns to update besides the PK
+    // (undefined values are not written, so they do not count).
+    if (!Object.entries(entity).some(([key, value]) => key !== primaryKey && value !== undefined)) {
       return;
     }
     const command = buildUpdateSql(tableName, entity, primaryKey, dialect);
-    await this.executeNonQuery(command.sql, command.params);
+    await this.send(command.sql, command.params);
   }
 
   /**
@@ -248,7 +255,7 @@ export class PgSqlProvider implements IDbProvider {
    */
   async remove<T extends object>(entity: T, tableName: string): Promise<void> {
     const command = buildDeleteSql(tableName, entity, await this.getPrimaryKeyColumn(tableName), dialect);
-    await this.executeNonQuery(command.sql, command.params);
+    await this.send(command.sql, command.params);
   }
 
   /**
@@ -338,7 +345,7 @@ export class PgSqlProvider implements IDbProvider {
    */
   async addMigration(migrationName: string, migrationScript: string): Promise<void> {
     await this.ensureMigrationHistoryTable();
-    await this.executeNonQuery(
+    await this.send(
       'INSERT INTO "__roma_migrations" ("migrationName", "migrationScript") VALUES ($1, $2)',
       [migrationName, migrationScript]
     );
@@ -357,7 +364,7 @@ export class PgSqlProvider implements IDbProvider {
    */
   async removeMigration(migrationName: string): Promise<void> {
     await this.ensureMigrationHistoryTable();
-    await this.executeNonQuery('DELETE FROM "__roma_migrations" WHERE "migrationName" = $1', [migrationName]);
+    await this.send('DELETE FROM "__roma_migrations" WHERE "migrationName" = $1', [migrationName]);
   }
 
   /**
@@ -447,7 +454,8 @@ export class PgSqlProvider implements IDbProvider {
       .map(column => `${dialect.quoteIdentifier(column.name)} ${this.mapColumnType(column)}${column.primaryKey ? ' NOT NULL' : ''}`)
       .join(', ');
     const primaryKeySql = primaryKey ? `, PRIMARY KEY (${dialect.quoteIdentifier(primaryKey)})` : '';
-    await this.executeNonQuery(`CREATE TABLE IF NOT EXISTS ${dialect.quoteIdentifier(input.tableName)} (${columns}${primaryKeySql})`);
+    await this.send(`CREATE TABLE IF NOT EXISTS ${dialect.quoteIdentifier(input.tableName)} (${columns}${primaryKeySql})`, []);
+    this.clearMetadataCache(input.tableName);
   }
 
   /**
@@ -465,7 +473,8 @@ export class PgSqlProvider implements IDbProvider {
    * await provider.dropTable('orders');
    */
   async dropTable(tableName: string): Promise<void> {
-    await this.executeNonQuery(`DROP TABLE IF EXISTS ${dialect.quoteIdentifier(tableName)}`);
+    await this.send(`DROP TABLE IF EXISTS ${dialect.quoteIdentifier(tableName)}`, []);
+    this.clearMetadataCache(tableName);
   }
 
   /**
@@ -482,9 +491,11 @@ export class PgSqlProvider implements IDbProvider {
    * await provider.addColumn('orders', { name: 'note', tsType: 'string' });
    */
   async addColumn(tableName: string, column: TableColumnInfo): Promise<void> {
-    await this.executeNonQuery(
-      `ALTER TABLE ${dialect.quoteIdentifier(tableName)} ADD COLUMN ${dialect.quoteIdentifier(column.name)} ${this.mapColumnType(column)}`
+    await this.send(
+      `ALTER TABLE ${dialect.quoteIdentifier(tableName)} ADD COLUMN ${dialect.quoteIdentifier(column.name)} ${this.mapColumnType(column)}`,
+      []
     );
+    this.clearMetadataCache(tableName);
   }
 
   /**
@@ -502,9 +513,11 @@ export class PgSqlProvider implements IDbProvider {
    * await provider.removeColumn('orders', 'note');
    */
   async removeColumn(tableName: string, columnName: string): Promise<void> {
-    await this.executeNonQuery(
-      `ALTER TABLE ${dialect.quoteIdentifier(tableName)} DROP COLUMN ${dialect.quoteIdentifier(columnName)}`
+    await this.send(
+      `ALTER TABLE ${dialect.quoteIdentifier(tableName)} DROP COLUMN ${dialect.quoteIdentifier(columnName)}`,
+      []
     );
+    this.clearMetadataCache(tableName);
   }
 
   /**
@@ -516,10 +529,9 @@ export class PgSqlProvider implements IDbProvider {
   }
 
   /**
-   * Returns the names of all tables in the `public` schema.
-   *
-   * Queries `pg_tables` filtering to `schemaname = 'public'`.  Tables in
-   * other schemas are not included.
+   * Returns the names of the tables the provider can reach by their
+   * unqualified name: tables in the schemas of the `search_path` that are not
+   * hidden by a same-named table in an earlier schema (`public` by default).
    *
    * @returns An array of table name strings.
    * @throws {Error} On connection or query errors.
@@ -530,8 +542,13 @@ export class PgSqlProvider implements IDbProvider {
    */
   async getTables(): Promise<string[]> {
     const rows = await this.executeQuery<{ tablename: string }>(`
-      SELECT tablename FROM pg_tables
-      WHERE schemaname = 'public'
+      SELECT c.relname AS tablename
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relkind IN ('r', 'p')
+        AND n.nspname = ANY (current_schemas(false))
+        AND pg_table_is_visible(c.oid)
+      ORDER BY c.relname
     `);
     return rows.map(row => row.tablename);
   }
@@ -542,7 +559,10 @@ export class PgSqlProvider implements IDbProvider {
    *
    * Joins `information_schema.columns` with `information_schema.table_constraints`
    * and `information_schema.key_column_usage` to compute an `EXISTS` subquery
-   * that flags primary-key columns.
+   * that flags primary-key columns. Only the schema that the unqualified name
+   * resolves to through the `search_path` (`to_regclass`, the same resolution
+   * as the provider's DML) is inspected, so a table with the same name in
+   * another schema cannot leak its columns or primary key into the result.
    *
    * @param table - Name of the table to inspect.
    * @returns An array of {@link TableColumnInfo} objects with name, tsType,
@@ -564,11 +584,20 @@ export class PgSqlProvider implements IDbProvider {
             ON tc.constraint_name = kcu.constraint_name
             AND tc.table_schema = kcu.table_schema
           WHERE tc.constraint_type = 'PRIMARY KEY'
-            AND tc.table_name = $1
+            AND tc.table_schema = c.table_schema
+            AND tc.table_name = c.table_name
+            AND kcu.table_name = c.table_name
             AND kcu.column_name = c.column_name
         ) AS primary_key
       FROM information_schema.columns c
-      WHERE c.table_name = $1
+      WHERE c.table_schema = (
+          SELECT n.nspname
+          FROM pg_class r
+          JOIN pg_namespace n ON n.oid = r.relnamespace
+          WHERE r.oid = to_regclass(quote_ident($1))
+        )
+        AND c.table_name = $1
+      ORDER BY c.ordinal_position
       `,
       [table]
     );
@@ -597,8 +626,16 @@ export class PgSqlProvider implements IDbProvider {
    * const rows = await provider.executeQuery('orders', query);
    * ```
    * When a `QueryObject` is passed the provider pushes serializable `WHERE`
-   * and `ORDER BY` to PostgreSQL, then applies remaining client-side predicates
-   * via {@link applyClientSideQuery}.
+   * and `ORDER BY` to PostgreSQL, then re-applies the JS predicates, ordering,
+   * paging and projection on copies of the rows whose driver values are
+   * converted to the JS types the entity uses (`bigint` and `numeric`, which
+   * `pg` returns as strings, to numbers; date strings to `Date`), so
+   * `where(x => x.id === 5)` keeps the row PostgreSQL matched. The original
+   * rows are returned. A predicate PostgreSQL already applied that compares a
+   * date/time column with a string literal is not re-run.
+   *
+   * Raw statements other than `SELECT`/`WITH`/`SHOW`/`EXPLAIN` clear the
+   * primary-key cache (see {@link clearMetadataCache}).
    *
    * @param query - Either a raw SQL string or a table name (for QueryObject).
    * @param params - Parameter array for raw SQL, or a `QueryObject`.
@@ -615,12 +652,16 @@ export class PgSqlProvider implements IDbProvider {
       // QueryObject path: build server-side SQL then apply remaining
       // client-side predicates (e.g. JS closures that can't be serialized).
       const command = buildSelectSql(queryOrEntityName, paramsOrQuery, dialect);
-      const rows = await this.executeQuery<T>(command.sql, command.params);
-      return applyClientSideQuery(rows, paramsOrQuery);
+      const result = await this.send(command.sql, command.params);
+      return applyQueryToDriverRows(result.rows as T[], paramsOrQuery, driverColumns(result.fields));
     }
 
+    if (!READ_ONLY_STATEMENT.test(queryOrEntityName)) {
+      // The statement may change the schema (keys included), or roll back DDL.
+      this.clearMetadataCache();
+    }
     // Raw SQL path: pg's Client.query() returns { rows: T[] }.
-    const result = await this.client.query(queryOrEntityName, paramsOrQuery);
+    const result = await this.send(queryOrEntityName, paramsOrQuery);
     return result.rows as T[];
   }
 
@@ -641,7 +682,30 @@ export class PgSqlProvider implements IDbProvider {
    * );
    */
   async executeNonQuery(sql: string, params: any[] = []): Promise<void> {
-    await this.client.query(sql, params);
+    if (!READ_ONLY_STATEMENT.test(sql)) {
+      // The statement may change the schema (keys included).
+      this.clearMetadataCache();
+    }
+    await this.send(sql, params);
+  }
+
+  /**
+   * Forgets the cached primary-key metadata (of one table, or of all).
+   * The provider already does this after its own DDL and after raw
+   * statements that are not `SELECT`/`WITH`; call it when the schema is
+   * changed by another process while this provider is connected.
+   */
+  clearMetadataCache(tableName?: string): void {
+    if (tableName === undefined) {
+      this.primaryKeyCache.clear();
+    } else {
+      this.primaryKeyCache.delete(tableName);
+    }
+  }
+
+  /** Sends one statement with `$N` parameters on the provider's client. */
+  private send(sql: string, params: any[]): Promise<QueryResult> {
+    return this.client.query(sql, params);
   }
 
   /**
@@ -652,27 +716,48 @@ export class PgSqlProvider implements IDbProvider {
    * timestamptz defaulting to `now()`.
    */
   private async ensureMigrationHistoryTable(): Promise<void> {
-    await this.executeNonQuery(`
+    await this.send(`
       CREATE TABLE IF NOT EXISTS "__roma_migrations" (
         "migrationName" TEXT NOT NULL PRIMARY KEY,
         "migrationScript" TEXT NOT NULL,
         "appliedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
       )
-    `);
+    `, []);
   }
 
   /**
    * Resolves the primary-key column name for a given table.
    *
-   * Falls back to `'id'` when no primary key is detected (e.g. composite keys
-   * or views).
+   * Falls back to `'id'` when no primary key is detected (e.g. views).
+   * Composite keys are rejected: matching rows by only one of their key
+   * columns would update or delete every row sharing that value.
+   *
+   * The key columns are cached per table (see {@link clearMetadataCache}),
+   * so `update`/`remove`/`find` cost one round trip instead of two.
    *
    * @param tableName - Table to inspect.
    * @returns The primary-key column name or `'id'`.
+   * @throws {Error} If the table has a composite primary key.
    */
   private async getPrimaryKeyColumn(tableName: string): Promise<string> {
-    const primaryKey = (await this.getColumnsForTable(tableName)).find(column => column.primaryKey)?.name;
-    return primaryKey || 'id';
+    let cached = this.primaryKeyCache.get(tableName);
+    if (!cached) {
+      const lookup = this.getColumnsForTable(tableName)
+        .then(columns => columns.filter(column => column.primaryKey).map(column => column.name));
+      cached = lookup;
+      this.primaryKeyCache.set(tableName, lookup);
+      // A failed lookup is not cached.
+      lookup.catch(() => {
+        if (this.primaryKeyCache.get(tableName) === lookup) {
+          this.primaryKeyCache.delete(tableName);
+        }
+      });
+    }
+    const keys = await cached;
+    if (keys.length > 1) {
+      throw new Error(`Table '${tableName}' has a composite primary key (${keys.join(', ')}); update/remove/find by entity support a single-column key only.`);
+    }
+    return keys[0] || 'id';
   }
 
   /**
@@ -725,4 +810,26 @@ export class PgSqlProvider implements IDbProvider {
     if (/(json|array)/.test(normalized)) return 'unknown';
     return 'string';
   }
+}
+
+/** PostgreSQL type OIDs (`FieldDef.dataTypeID`). */
+const PG_TYPE = { INT8: 20, NUMERIC: 1700, DATE: 1082, TIMESTAMP: 1114, TIMESTAMPTZ: 1184 };
+
+/**
+ * Converters for the columns of a `pg` result: `bigint` and `numeric`
+ * (strings by default) to numbers, date strings (custom type parsers) to
+ * `Date`.
+ */
+function driverColumns(fields: QueryResult['fields'] | undefined): DriverColumns {
+  const converters: Record<string, ValueConverter> = {};
+  const temporal = new Set<string>();
+  for (const field of fields || []) {
+    if (field.dataTypeID === PG_TYPE.INT8 || field.dataTypeID === PG_TYPE.NUMERIC) {
+      converters[field.name] = toNumber;
+    } else if ([PG_TYPE.DATE, PG_TYPE.TIMESTAMP, PG_TYPE.TIMESTAMPTZ].includes(field.dataTypeID)) {
+      converters[field.name] = toDate;
+      temporal.add(field.name);
+    }
+  }
+  return { converters, temporal };
 }
