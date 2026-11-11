@@ -130,6 +130,13 @@ describe('client-side predicates on driver values', () => {
     assert.deepEqual((await query(provider).where(x => x.id === '9007199254740993').toList()).map(r => r.id), ['9007199254740993']);
   });
 
+  test('predicates written against the driver values (2.0.0 style) still match the rows PostgreSQL returned', async () => {
+    // PostgreSQL applied `id = '2'` / `price = '9.99'`; the re-check must not drop the row.
+    const { provider } = selectStub([rows[1]]);
+    assert.deepEqual((await query(provider).where(x => x.id === '2').toList()).map(r => r.id), ['2']);
+    assert.deepEqual((await query(provider).where(x => x.price === '9.99').toList()).map(r => r.id), ['2']);
+  });
+
   test('numeric strings sort as numbers', async () => {
     const { provider } = selectStub(rows.slice(0, 2));
     assert.deepEqual((await query(provider).orderByDescending(x => x.price).toList()).map(r => r.id), ['1', '2']);

@@ -34,7 +34,8 @@ export interface DriverColumns {
  * literal, such as `x => x.born >= '2024-01-01'`, is not re-run: JS cannot
  * compare a `Date` with a string, and the database comparison is exact.
  * Every other predicate is re-run, which also trims rows a `LIKE` pattern
- * matched loosely.
+ * matched loosely; for predicates the database applied, a row passes when
+ * the predicate holds on the converted or on the original driver row.
  */
 export function applyQueryToDriverRows<T, TResult>(
   rows: T[],
@@ -63,7 +64,14 @@ export function applyQueryToDriverRows<T, TResult>(
     if (appliedByServer && comparesTemporalWithString(query.whereExpressions[index], columns.temporal)) {
       return;
     }
-    current = current.filter(predicate);
+    // When the database already applied every predicate, the re-check only
+    // trims rows it matched loosely, so a row is kept when the predicate holds
+    // on either the converted or the original driver value: predicates written
+    // against the driver's types (`x.active === 1`, `x.id === '5'`) keep
+    // working. When JS is the only filter, the converted row decides.
+    current = appliedByServer
+      ? current.filter(row => predicate(row) || predicate(originals.get(row) as T))
+      : current.filter(predicate);
   });
   if (query.where && !query.predicates.includes(query.where)) {
     current = current.filter(query.where);
